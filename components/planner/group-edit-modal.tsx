@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { GrupoGDVPlanner, PersonaPlanner, RolEnGrupo } from '@/lib/planner/types'
 import {
   BotonSistema,
@@ -48,22 +48,33 @@ export function GroupEditModal({
   onAsignarPersonaAGrupo,
   onDesasignarPersona
 }: GroupEditModalProps) {
-  if (!isOpen || !grupo) return null
-
   // Form state
-  const [nombre, setNombre] = useState(grupo.nombre)
-  const [ciudad, setCiudad] = useState<'Barquisimeto' | 'Cabudare'>(
-    grupo.ciudad === 'Cabudare' ? 'Cabudare' : 'Barquisimeto'
-  )
-  const [segmentoId, setSegmentoId] = useState(grupo.segmento_id || '')
-  const [zona, setZona] = useState(grupo.zona || '')
-  const [sector, setSector] = useState(grupo.sector || '')
-  const [capacidadMaxima, setCapacidadMaxima] = useState(grupo.capacidad_maxima || 12)
+  const [nombre, setNombre] = useState('')
+  const [ciudad, setCiudad] = useState<'Barquisimeto' | 'Cabudare'>('Barquisimeto')
+  const [segmentoId, setSegmentoId] = useState('')
+  const [zona, setZona] = useState('')
+  const [sector, setSector] = useState('')
+  const [capacidadMaxima, setCapacidadMaxima] = useState(12)
 
   // Quick add member state
   const [busquedaPersona, setBusquedaPersona] = useState('')
   const [rolParaAsignar, setRolParaAsignar] = useState<RolEnGrupo>('miembro')
   const [confirmarEliminar, setConfirmarEliminar] = useState(false)
+
+  // Sync state when grupo changes
+  useEffect(() => {
+    if (grupo) {
+      setNombre(grupo.nombre || '')
+      setCiudad(grupo.ciudad === 'Cabudare' ? 'Cabudare' : 'Barquisimeto')
+      setSegmentoId(grupo.segmento_id || '')
+      setZona(grupo.zona || '')
+      setSector(grupo.sector || '')
+      setCapacidadMaxima(grupo.capacidad_maxima || 12)
+      setBusquedaPersona('')
+      setRolParaAsignar('miembro')
+      setConfirmarEliminar(false)
+    }
+  }, [grupo, isOpen])
 
   // Filter available people for fast inclusion
   const personasParaAgregar = useMemo(() => {
@@ -73,6 +84,8 @@ export function GroupEditModal({
       .filter(p => `${p.nombre} ${p.apellido}`.toLowerCase().includes(q))
       .slice(0, 5)
   }, [busquedaPersona, personasDisponibles])
+
+  if (!isOpen || !grupo) return null
 
   const totalIntegrantesActuales =
     (grupo.miembros?.length || 0) +
