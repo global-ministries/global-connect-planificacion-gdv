@@ -1,0 +1,1 @@
+export const AUTH_FETCH_TIMEOUT_MS = 8000

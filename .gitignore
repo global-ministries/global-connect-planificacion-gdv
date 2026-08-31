@@ -1,0 +1,77 @@
+node_modules
+node_modules
+node_modules
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env
+.env*.local
+
+# vercel
+.vercel
+# Carpetas de otros agentes (solo Antigravity en .agent/)
+.agent/
+.agent/workflows/
+.agents/
+.claude/
+.kiro/
+.codex/
+.copilot/
+
+# database backups
+/backups/
+*.bak
+
+# Generated local review/apply artifacts
+/tmp/
+/artifacts/
+
+# Build artifacts
+tsconfig.tsbuildinfo
+next-env.d.ts
+build-output.txt
+
+# Lighthouse CI
+.lighthouseci/
+
+# Agent directories
+.atl/
+.engram/
+.pi/
+
+# Local agent config
+opencode.json
+
+# Local commercial artifacts
+generate_proposal.py
+Propuesta_Comercial_GlobalConnect.docx
+
+# Sentry Config File
+.env.sentry-build-plugin
+
+# Local pastor working notes (never commit)
+/docs/MINI_REPORTE_PASTOR.md

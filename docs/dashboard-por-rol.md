@@ -1,0 +1,236 @@
+# Dashboard por rol en GlobalConnect
+
+Este documento describe la arquitectura, responsabilidades y guía de implementación del nuevo Dashboard con vistas personalizadas por rol. También documenta el diseño de las tarjetas KPI, alineado al estilo de las tarjetas de Reportes.
+
+## Objetivos
+- **Vistas fijas por rol**: Admin/Pastor/Director General, Director de Etapa, Líder, Miembro.
+- **Data unificada**: Una RPC entrega el JSON necesario según el rol del usuario.
+- **UI consistente**: Reutilizar el sistema de diseño y replicar el estilo de las tarjetas usadas en Reportes.
+
+## Estructura
+- `app/dashboard/page.tsx`
+  - Server Component. Llama a `obtenerDatosDashboard()` y selecciona el layout por rol.
+- `lib/dashboard/obtenerDatosDashboard.ts`
+  - Server function. Resuelve el rol principal (admin, pastor, director-general, director-etapa, lider, miembro).
+  - Intenta llamar la RPC `obtener_datos_dashboard(p_auth_id)` y hace fallback a `obtenerBaselineStats()` para roles superiores.
+- `components/dashboard/roles/`
+  - `DashboardAdmin.tsx`
+  - `DashboardDirector.tsx`
+  - `DashboardLider.tsx`
+  - `DashboardMiembro.tsx`
+  - Todos son Client Components ("use client"). Reciben datos vía props y renderizan su grid y widgets.
+- `components/dashboard/widgets/`
+  - Widgets reutilizables y “tontos”: `MetricWidget`, `DonutWidget`, `ActivityWidget`, `StatsWidget`, `QuickActionsWidget`, `KpisGruposPanel`.
+  - Todos son Client Components.
+
+## Flujo de datos
+1. `page.tsx` (Server) → `obtenerDatosDashboard()` (Server) → RPC (si existe) o fallback.
+2. Según `data.rol`, renderiza el layout: Admin/Director/Líder/Miembro.
+3. Los layouts por rol pasan datos a widgets puramente de presentación.
+
+## RPC unificada sugerida
+- Nombre: `obtener_datos_dashboard(p_auth_id uuid)`
+- Retorno JSON estructurado por rol. Ejemplo:
+```json
+{
+  "rol": "admin",
+  "widgets": {
+    "kpis_globales": { /* ... */ },
+    "proximos_cumpleanos": [ /* ... */ ],
+    "grupos_en_riesgo": [ /* ... */ ]
+  }
+}
+```
+- Nota: La implementación actual hace fallback a `obtenerBaselineStats()` para Admin/Pastor/Director General mientras se crea la RPC.
+
+## RPC implementada (roles superiores)
+
+Función: `public.obtener_datos_dashboard(p_auth_id uuid) RETURNS jsonb`
+
+### Admin / Pastor (acceso global)
+
+Para `admin/pastor` devuelve datos **globales** (todos los grupos, miembros, actividad):
+
+```json
+{
+  "rol": "admin",
+  "widgets": {
+    "kpis_globales": {
+      "total_miembros": { "valor": 946, "variacion": 1.5 },
+      "asistencia_semanal": { "valor": 88.5 },
+      "grupos_activos": { "valor": 83 },
+      "nuevos_miembros_mes": { "valor": 25 }
+    },
+    "actividad_reciente": [ /* global */ ],
+    "proximos_cumpleanos": [ /* global */ ],
+    "grupos_en_riesgo": [ /* global */ ],
+    "tendencia_asistencia": [ /* global */ ],
+    "distribucion_segmentos": [ /* global */ ]
+  }
+}
+```
+
+### Director General (scoped por `director_general_segmentos`)
+
+> [!IMPORTANT]
+> **Cambio 2026-03-26:** El DG ya NO se trata como admin. Tiene una rama **dedicada** que filtra todos los widgets por sus segmentos asignados en `director_general_segmentos`.
+
+Para `director-general` devuelve datos **scoped** (solo segmentos asignados):
+
+```json
+{
+  "rol": "director-general",
+  "widgets": {
+    "kpis_globales": {
+      "total_miembros": { "valor": 43 },
+      "grupos_activos": { "valor": 5 }
+    },
+    "actividad_reciente": [ /* solo de sus grupos */ ],
+    "proximos_cumpleanos": [ /* solo miembros de sus grupos */ ],
+    "grupos_en_riesgo": [ /* solo de sus segmentos */ ],
+    "tendencia_asistencia": [ /* solo de sus grupos */ ],
+    "distribucion_segmentos": [ /* solo sus segmentos */ ]
+  }
+}
+```
+
+**Patrón de filtrado DG** (usado en todos los CTEs):
+```sql
+WHERE g.segmento_id IN (
+  SELECT dgs.segmento_id 
+  FROM director_general_segmentos dgs 
+  WHERE dgs.usuario_id = v_user_id
+)
+```
+
+**RPCs adicionales scoped para DG:**
+| RPC | Scoping |
+|-----|---------|
+| `obtener_dashboard_riesgo` | Segmentos asignados |
+| `obtener_reporte_semanal_asistencia` | Rama `v_es_director_general` dedicada |
+| `listar_usuarios_con_permisos` | Solo miembros de sus grupos |
+| `obtener_estadisticas_usuarios_con_permisos` | Solo miembros de sus grupos |
+
+**Client-side protection**: `DashboardAdmin.tsx` recibe prop `rol` y salta la llamada a `resumen_dashboard_admin` cuando es DG, evitando que datos globales sobrescriban los scoped.
+
+Notas:
+- La asistencia semanal se obtiene reutilizando `obtener_reporte_semanal_asistencia(p_incluir_todos=false)`.
+- La distribución por segmento usa `COUNT(DISTINCT gm.usuario_id)` por segmento activo.
+- Actividad reciente se arma con `UNION ALL` sobre `usuarios`, `grupos`, `grupo_miembros`, `eventos_grupo` (ordenado por `fecha` DESC, LIMIT 5).
+- Cumpleaños próximos normaliza año y filtra próximos 14 días (LIMIT 7).
+
+Además, se agregó la migración `20251028121000_ajuste_kpi_miembros_asistentes_distinct.sql` para que el KPI "Miembros Asistentes" en el reporte semanal cuente personas únicas (`COUNT(DISTINCT a.usuario_id)`).
+
+## Dashboard del Director de Etapa
+
+### Backend
+- Se extendió `public.obtener_datos_dashboard(p_auth_id uuid)` para soportar `director-etapa` con un bloque `ELSIF` que filtra por alcance.
+- Obtención de alcance: `director_etapa_grupos` + `segmento_lideres` para derivar `v_grupos_asignados_ids` del usuario (por `sl.usuario_id` y `sl.tipo_lider = 'director_etapa'`).
+- Widgets de retorno (claves bajo `widgets`):
+  - `kpis_alcance`: `{ total_miembros.valor, asistencia_semanal.valor, grupos_activos.valor, nuevos_miembros_mes.valor }`.
+  - `actividad_reciente_alcance`: eventos filtrados por grupos asignados (`USUARIO_A_GRUPO`, `NUEVO_GRUPO`, `REPORTE_ASISTENCIA`).
+  - `proximos_cumpleanos_alcance`: miembros de los grupos asignados, próximos 14 días.
+  - `grupos_en_riesgo_alcance`: tomado de `obtener_reporte_semanal_asistencia` (respeta permisos y alcance del director).
+  - `lideres_sin_reporte`: grupos asignados sin eventos en la semana actual + `STRING_AGG` de líderes (`grupo_miembros.rol = 'Líder'`).
+- Migración: `supabase/migrations/20251028150000_dashboard_director_vista.sql`.
+
+### Frontend
+- `app/dashboard/page.tsx` ya enruta a `DashboardDirector` cuando `data.rol === 'director-etapa'`.
+- `components/dashboard/roles/DashboardDirector.tsx` renderiza:
+  - `MetricWidget` x4 con `kpis_alcance`.
+  - `PendingLeadersWidget` (nuevo) con `lideres_sin_reporte`.
+  - `ActivityWidget` con `actividad_reciente_alcance`.
+  - `BirthdayWidget` con `proximos_cumpleanos_alcance` (incluye “Ver más”).
+  - `RiskGroupsWidget` con `grupos_en_riesgo_alcance`.
+- Nuevo widget: `components/dashboard/widgets/PendingLeadersWidget.tsx`.
+  - Muestra grupo (con link a `/dashboard/grupos/[id]`), líderes y botón “Contactar”.
+  - Scroll interno `max-h-64` para consistencia con otras tarjetas.
+
+### Notas de UX
+- Se reemplaza el ranking por segmentos por una tarjeta accionable: “Líderes Pendientes de Reporte”.
+- Alturas y densidad visual alineadas con Admin (mismo sistema de diseño y paddings).
+- Todos los datos se filtran estrictamente al alcance del director.
+
+## Dashboard del Líder
+
+### Backend
+- Se extendió `public.obtener_datos_dashboard(p_auth_id uuid)` con un bloque `ELSIF v_rol_nombre = 'lider'`.
+- Alcance: `v_grupos_lider_ids` obtenido desde `grupo_miembros` filtrando por `gm.usuario_id = v_user_id` y `gm.rol = 'Líder'`.
+- Widgets devueltos (claves bajo `widgets`):
+  - `accion_requerida` (o `null`): si falta registrar asistencia esta semana para alguno de sus grupos, se retorna un objeto con `{ tipo, mensaje, grupo_id, grupo_nombre }` del primer grupo pendiente.
+  - `kpis_grupo`: `{ asistencia_ultima_reunion, total_miembros }`. La asistencia se calcula sobre el último `eventos_grupo` de cualquier grupo del líder; `total_miembros` es del grupo de ese último evento.
+  - `proximos_cumpleanos_grupo`: miembros de sus grupos con cumpleaños en los próximos 14 días.
+  - `miembros_ausentes_recientemente`: ausentes (presente=false) en las últimas 2 reuniones (cualquier grupo del líder), con fecha de la última ausencia.
+  - `nuevos_miembros_grupo`: miembros agregados en los últimos 30 días a cualquiera de sus grupos.
+- Migración: `supabase/migrations/20251028160000_dashboard_lider_vista.sql`.
+
+### Frontend
+- `app/dashboard/page.tsx` ya renderiza `DashboardLider` cuando `data.rol === 'lider'`.
+- `components/dashboard/roles/DashboardLider.tsx`:
+  - Banner superior condicional: `ActionRequiredWidget` con `widgets.accion_requerida`.
+  - KPIs: `MetricWidget` x2 (`asistencia_ultima_reunion`, `total_miembros`).
+  - Cumpleaños: `BirthdayWidget` con `proximos_cumpleanos_grupo`.
+  - Seguimiento de ausencias: `RecentAbsencesWidget` con `miembros_ausentes_recientemente`.
+  - Nuevos miembros: `NewMembersWidget` con `nuevos_miembros_grupo`.
+- Nuevos widgets:
+  - `components/dashboard/widgets/ActionRequiredWidget.tsx`: banner visible, botón “Registrar Asistencia” (link a `/dashboard/grupos/[grupo_id]/asistencia`).
+  - `components/dashboard/widgets/RecentAbsencesWidget.tsx`: lista con `UserAvatar`, nombre y fecha de última ausencia (link a `/dashboard/users/[id]/asistencia`).
+  - `components/dashboard/widgets/NewMembersWidget.tsx`: lista de nuevos miembros (link a `/dashboard/users/[id]`).
+
+### Notas de UX
+- Enfocado en acción inmediata (registrar asistencia) y cuidado pastoral (cumpleaños y ausencias recientes).
+- Consistencia visual con Admin/Director: `TarjetaSistema`, gradientes y grid responsivo.
+
+## Diseño: tarjetas KPI del Dashboard (igual a Reportes)
+Las tarjetas KPI del dashboard replican el patrón visual de las tarjetas de Reportes.
+- Componente: `components/dashboard/widgets/MetricWidget.tsx`
+- Base visual: `TarjetaSistema` (glassmorphism), padding `p-6`.
+- Contenido:
+  - Ícono con fondo en gradiente (naranja por defecto) en un contenedor `p-3 rounded-xl`.
+  - Label en `TextoSistema variante="sutil" tamaño="sm"`.
+  - Valor principal en `TituloSistema nivel={2}` con `text-3xl font-bold`.
+- Ejemplo de tarjeta en Reportes: ver `components/reportes/ReporteSemanal.client.tsx` (sección KPIs globales) y `TarjetaSistema`.
+
+Patrón usado en `MetricWidget`:
+```tsx
+<TarjetaSistema className="p-6">
+  <div className="flex items-center gap-4">
+    <div className="p-3 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl flex-shrink-0">
+      <Icono className="w-6 h-6 text-white" />
+    </div>
+    <div className="flex-1">
+      <TextoSistema variante="sutil" tamaño="sm">{title}</TextoSistema>
+      <TituloSistema nivel={2} className="text-3xl font-bold text-gray-900">{value}</TituloSistema>
+    </div>
+  </div>
+</TarjetaSistema>
+```
+
+## Decisiones y buenas prácticas
+- **Client Components por rol**: Evita errores de serialización de funciones (p. ej. íconos de `lucide-react`) desde Server → Client.
+- **Separación de responsabilidades**: `page.tsx` resuelve datos/rol; los layouts por rol se enfocan en UI.
+- **Simplicidad y consistencia**: Uso de `TarjetaSistema`, `TituloSistema`, `TextoSistema` para una UI coherente.
+
+## Cómo extender/iterar
+- **Nuevos widgets**: Crear en `components/dashboard/widgets/` con “use client” y props tipadas. Mantener estilo con `TarjetaSistema`.
+- **Datos por rol**: Ampliar `obtener_datos_dashboard` en Supabase y parsear en `obtenerDatosDashboard()`.
+- **Colores por KPI**: Permitir prop opcional para gradiente; por ahora, naranja por defecto.
+
+## Widgets conectados (rol admin)
+- **MetricWidget**: Ahora acepta `varianteColor` (`naranja|azul|verde|purpura`) y `variacion` (badge positivo/negativo). Arch.: `components/dashboard/widgets/MetricWidget.tsx`.
+- **ActivityWidget**: Recibe `items` con `{ tipo, texto, fecha }` y muestra un ícono por tipo. Arch.: `components/dashboard/widgets/ActivityWidget.tsx`.
+- **BirthdayWidget**: Lista próximos cumpleaños con `UserAvatar`. Arch.: `components/dashboard/widgets/BirthdayWidget.tsx`.
+- **RiskGroupsWidget**: Lista grupos en riesgo con link a detalle. Arch.: `components/dashboard/widgets/RiskGroupsWidget.tsx`.
+- **TrendWidget**: Línea de tendencia de 8 semanas. Arch.: `components/dashboard/widgets/TrendWidget.tsx`.
+- **DonutWidget**: Conecta a `distribucion_segmentos` (miembros únicos por segmento) y centro dinámico.
+
+## Pendientes recomendados
+- Implementar la RPC `obtener_datos_dashboard` con agregaciones reales por rol.
+- Conectar widgets de Director/Líder/Miembro a datos reales.
+- Testear rendimiento y caché en la carga del dashboard.
+
+## Convenciones de commits
+- `refactor(dashboard): ...` para cambios de estructura.
+- `feat(dashboard): ...` para nuevas vistas o widgets.
+- `feat(db): ...` para migraciones/RPC.
+

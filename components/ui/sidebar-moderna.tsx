@@ -1,0 +1,747 @@
+"use client"
+
+import React, { useState, useEffect } from 'react'
+import Link from 'next/link'
+import { usePathname, useRouter } from 'next/navigation'
+import { cn } from '@/lib/utils'
+import { LogoGlobalConnect } from '@/components/ui/logo-global-connect'
+import { SelectorCampus } from '@/components/ui/selector-campus'
+import {
+  Users,
+  UserCheck,
+  Settings,
+  HelpCircle,
+  LogOut,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  Home,
+  User,
+  Megaphone,
+  MapPin,
+  Calendar,
+  BarChart3,
+  House,
+  ShieldAlert,
+  ClipboardList,
+  CalendarRange,
+  Sparkles
+} from 'lucide-react'
+import { BadgeSistema } from './sistema-diseno'
+import { useCurrentUser } from '@/hooks/useCurrentUser'
+import { TalleresNavSubmenu } from '@/components/talleres/nav-submenu'
+import { useCachedAccessCredentials } from '@/hooks/useCachedAccessCredentials'
+import { logout } from '@/lib/actions/auth.actions'
+import { ThemeToggle } from './theme-toggle'
+import { useBranding } from '@/hooks/useBranding'
+import { usePlatformNavigationViewItems } from '@/components/ui/platform-navigation-view-items'
+import { canAccess } from '@/lib/navigation/canAccess'
+
+interface SidebarModernaProps {
+  className?: string
+}
+
+interface SubItem {
+  id: string
+  label: string
+  href: string
+  icon?: React.ComponentType<{ className?: string }>
+  /** Roles que pueden ver este sub-item. Si no se define, es visible para todos. */
+  roles?: string[]
+  /** Support capabilities que pueden ver este sub-item. Si no se define, es visible para todos. */
+  capabilities?: string[]
+}
+
+interface MenuItem {
+  id: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  href: string
+  badge?: string | number
+  badgeVariant?: 'default' | 'success' | 'warning' | 'error' | 'info'
+  children?: SubItem[]
+  className?: string
+  /** Roles que pueden ver este item. Si no se define, es visible para todos. */
+  roles?: string[]
+  /** Support capabilities que pueden ver este item. Si no se define, es visible para todos. */
+  capabilities?: string[]
+}
+
+const SUPPORT_CONFIGURATION_ROLES = ['admin', 'pastor', 'director-general']
+
+const menuItems: MenuItem[] = [
+  {
+    id: 'dashboard',
+    label: 'Dashboard',
+    icon: Home,
+    href: 'https://miembros.yosoyglobal.org/dashboard',
+  },
+  {
+    id: 'usuarios',
+    label: 'Usuarios',
+    icon: Users,
+    href: 'https://miembros.yosoyglobal.org/users',
+  },
+  {
+    id: 'grupos-vida',
+    label: 'Grupos de Vida',
+    icon: UserCheck,
+    href: 'https://miembros.yosoyglobal.org/grupos-vida',
+    children: [
+      {
+        id: 'gv-planner',
+        label: 'GDV Planner',
+        href: '/planner',
+        icon: CalendarRange,
+      },
+    ],
+  },
+  {
+    id: 'configuracion',
+    label: 'Configuración',
+    icon: Settings,
+    href: 'https://miembros.yosoyglobal.org/configuracion',
+  },
+]
+
+const footerItems: MenuItem[] = []
+
+// ─── Active indicator pill ───
+function ActivePill() {
+  return (
+    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-[var(--brand-primary)] rounded-r-full animate-bounce-spring" />
+  )
+}
+
+interface SidebarLinkProps {
+  href: string
+  className?: string
+  children: React.ReactNode
+  onMouseEnter?: (e: React.MouseEvent) => void
+  onMouseLeave?: () => void
+  ariaCurrent?: 'page' | undefined
+}
+
+function SidebarLink({
+  href,
+  className,
+  children,
+  onMouseEnter,
+  onMouseLeave,
+  ariaCurrent,
+}: SidebarLinkProps) {
+  const isExternal = href.startsWith('http://') || href.startsWith('https://')
+
+  if (isExternal) {
+    return (
+      <a
+        href={href}
+        className={className}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+        aria-current={ariaCurrent}
+      >
+        {children}
+      </a>
+    )
+  }
+
+  return (
+    <Link
+      href={href}
+      prefetch={false}
+      className={className}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      aria-current={ariaCurrent}
+    >
+      {children}
+    </Link>
+  )
+}
+
+/**
+ * Sidebar principal con navegación, submenús colapsables, selector de campus.
+ * Incluye modal de confirmación de logout y tooltips en modo colapsado.
+ */
+export function SidebarModerna({ className }: SidebarModernaProps) {
+  const [isCollapsed, setIsCollapsed] = useState(false)
+  const [openSubmenus, setOpenSubmenus] = useState<Set<string>>(new Set())
+  const [showLogoutModal, setShowLogoutModal] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+  const [tooltip, setTooltip] = useState<{ label: string; top: number } | null>(null)
+  const router = useRouter()
+  const pathname = usePathname()
+  const { usuario, roles, supportCapabilities = [], platformSession, loading } = useCurrentUser()
+
+  // Restore collapsed preference after mount to avoid SSR/client mismatch (#224)
+  useEffect(() => {
+    const saved = window.localStorage.getItem('sidebar-collapsed')
+    /* eslint-disable react-hooks/set-state-in-effect -- restoring persisted UI preference after mount (pre-existing pattern) */
+    setIsCollapsed(parseSidebarCollapsed(saved))
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [])
+  const effectiveRoles = useCachedAccessCredentials({ values: roles, loading, isSignedIn: !!usuario })
+  const effectiveSupportCapabilities = useCachedAccessCredentials({ values: supportCapabilities, loading, isSignedIn: !!usuario })
+  const platformNavigationItems = usePlatformNavigationViewItems(platformSession)
+  const branding = useBranding()
+  const primaryMenuItems = [...menuItems, ...platformNavigationItems]
+
+
+  // ─── Tooltip hover handlers (collapsed mode) ───
+  const showTooltip = (e: React.MouseEvent, label: string) => {
+    if (!isCollapsed) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    setTooltip({ label, top: rect.top + rect.height / 2 })
+  }
+  const hideTooltip = () => setTooltip(null)
+
+  // Auto-expand submenus when a child route is active
+  useEffect(() => {
+    const newOpen = new Set<string>()
+    for (const item of menuItems) {
+      if (item.children) {
+        const isChildActive = item.children.some(child =>
+          pathname === child.href || pathname?.startsWith(child.href + '/')
+        )
+        if (isChildActive) {
+          newOpen.add(item.id)
+        }
+      }
+    }
+    // PR25 + PR27 — also auto-expand the talleres sub-menu when the
+    // active route is under the talleres admin tree. The
+    // platformNavigation items themselves don't carry
+    // `children: SubItem[]` (their view-item type has
+    // `children?: never`), but the talleres platform items do get a
+    // chevron in the render path (see the `isTalleresPlatformItem`
+    // branch in the map below), and that chevron drives the same
+    // `openSubmenus` slot used by the static menu items. The id is
+    // built in `components/ui/platform-navigation-view-items.ts` as
+    // `platform-${item.id}-${scope.type}-${scope.id ?? 'global'}`,
+    // so for the talleres admin item the full id is e.g.
+    // "platform-talleres_admin-taller-global".
+    //
+    // CONVENTION NOTE: the segment between "talleres" and the role
+    // uses an UNDERSCORE (`_`), not a hyphen. The items registered in
+    // `lib/platform/navigation.ts` are `talleres_participation`,
+    // `talleres_admin`, etc., so the synthetic id always starts with
+    // `platform-talleres_` (single underscore). The matching check
+    // below uses `.startsWith('platform-talleres_')` accordingly.
+    //
+    // PR26 — we open the matching platform parent so the auto-expand
+    // path mirrors what the static `menuItems` flow does. The active
+    // check is inlined (matches the `isActive` helper defined below
+    // on every render) to avoid accessing `isActive` before its
+    // declaration inside this useEffect.
+    //
+    // PR51 — the talleres submenu (TalleresNavSubmenu) aggregates links
+    // across the WHOLE talleres route family: the participant tree
+    // (/talleres/*) AND the admin tree (/admin/talleres/*). But the
+    // platform parent's own href is only the participant landing
+    // (/talleres/explorar), so matching solely on that href left an admin
+    // sitting on /admin/talleres/* with the submenu collapsed — hiding the
+    // last sub-item "Grupos de Corto Plazo" (href /admin/talleres/abstracto).
+    // Open the parent whenever the active route is anywhere in the family.
+    const inTalleresFamily =
+      !!pathname &&
+      (pathname === '/talleres' ||
+        pathname.startsWith('/talleres/') ||
+        pathname === '/admin/talleres' ||
+        pathname.startsWith('/admin/talleres/'))
+    for (const item of platformNavigationItems) {
+      if (!item.id.startsWith('platform-talleres_')) continue
+      const href = item.href
+      const isMatch =
+        pathname === href ||
+        (href !== '/dashboard' && !!pathname?.startsWith(href + '/'))
+      if (isMatch || inTalleresFamily) {
+        newOpen.add(item.id)
+      }
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sincronización de submenús activos con la ruta actual (patrón preexistente)
+    setOpenSubmenus(prev => {
+      // Merge: keep manually opened ones, add auto-opened ones
+      const merged = new Set(prev)
+      newOpen.forEach(id => merged.add(id))
+      return merged
+    })
+  }, [pathname, platformNavigationItems])
+
+  // PR21.2 + PR21.3: When the browser tab becomes visible again (user
+  // switches back to the tab), refresh the server tree AND dispatch a
+  // custom event so the client-side CurrentUserProvider re-fetches the
+  // platformSession. This makes newly-granted capabilities appear in
+  // the navigation without requiring a full logout+login.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') {
+        router.refresh()
+        window.dispatchEvent(new CustomEvent('talleres:refresh-session'))
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [router])
+
+  // Detectar si es móvil
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768)
+      if (window.innerWidth < 768) {
+        setIsCollapsed(true)
+      }
+    }
+
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
+
+  // Guardar estado en localStorage
+  const toggleSidebar = () => {
+    const newState = !isCollapsed
+    setIsCollapsed(newState)
+    if (!isMobile) {
+      localStorage.setItem('sidebar-collapsed', JSON.stringify(newState))
+    }
+  }
+
+  const toggleSubmenu = (id: string) => {
+    setOpenSubmenus(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  // Función para manejar logout
+  const handleLogout = async () => {
+    try {
+      await logout()
+    } catch (error) {
+      console.error('Error durante logout:', error)
+      router.push('/')
+    }
+  }
+
+  const confirmLogout = () => {
+    setShowLogoutModal(true)
+  }
+
+  const isActive = (href: string): boolean => {
+    if (href.startsWith('http://') || href.startsWith('https://')) {
+      return false
+    }
+    return pathname === href ||
+      (href !== "/dashboard" && !!pathname?.startsWith(href + '/'))
+  }
+
+  const isParentActive = (item: MenuItem): boolean => {
+    if (item.children && item.children.length > 0) {
+      return item.children.some(child => isActive(child.href)) || isActive(item.href)
+    }
+    return isActive(item.href)
+  }
+
+  const accessCredentials = { roles: effectiveRoles, supportCapabilities: effectiveSupportCapabilities }
+
+  // ─── Shared link styles ───
+  const linkClasses = (active: boolean) => cn(
+    "flex items-center gap-3 px-3 py-2 rounded-xl group relative min-h-[44px]",
+    "transition-[background-color,color,transform] duration-200 ease-expo",
+    "press-scale focus-ring touch-manipulation",
+    active
+      ? "bg-[var(--brand-accent)] text-[var(--brand-primary)] border border-[var(--brand-primary)]/20"
+      : "text-foreground hover:bg-[var(--brand-accent)] hover:text-foreground",
+    isCollapsed && "justify-center px-2"
+  )
+
+  const subLinkClasses = (active: boolean) => cn(
+    "flex items-center gap-3 px-3 py-1.5 rounded-lg group relative min-h-[36px] text-sm",
+    "transition-[background-color,color,transform] duration-200 ease-expo",
+    "focus-ring touch-manipulation",
+    active
+      ? "bg-[var(--brand-accent)] text-[var(--brand-primary)] font-medium"
+      : "text-muted-foreground hover:bg-[var(--brand-accent)] hover:text-foreground"
+  )
+
+  const iconClasses = (active: boolean) => cn(
+    "flex-shrink-0 transition-colors",
+    active ? "text-[var(--brand-primary)]" : "text-muted-foreground group-hover:text-foreground",
+    isCollapsed ? "w-6 h-6" : "w-5 h-5"
+  )
+
+  // ─── Sidebar width for fixed tooltip positioning ───
+  const sidebarWidth = isCollapsed ? 64 : 256
+
+  return (
+    <>
+      {/* Overlay para móvil */}
+      {isMobile && !isCollapsed && (
+        <div
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40 md:hidden"
+          onClick={() => setIsCollapsed(true)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar */}
+      <div
+        className={cn(
+          "fixed left-0 top-0 z-50 h-full hidden md:flex flex-col glass-panel-elevated border-r border-[var(--glass-border)]",
+          "transition-[width,transform] duration-300 ease-expo",
+          isCollapsed ? "w-16" : "w-64",
+          "md:relative md:z-auto",
+          isMobile && isCollapsed && "-translate-x-full md:translate-x-0",
+          className
+        )}
+        aria-hidden={isMobile ? true : undefined}
+        inert={isMobile ? true : undefined}
+      >
+        {/* Header con logo y toggle */}
+        <div className="flex items-center justify-between p-3">
+          {!isCollapsed && (
+            <div className="flex items-center">
+              <LogoGlobalConnect tamaño="md" className="w-[96px] h-auto" logoLightUrl={branding.logoLightUrl} logoDarkUrl={branding.logoDarkUrl} />
+            </div>
+          )}
+
+          <button
+            onClick={toggleSidebar}
+            aria-label={isCollapsed ? "Expandir menú" : "Contraer menú"}
+            className="p-2 rounded-xl hover:bg-[var(--brand-accent)] transition-[background-color,transform] duration-200 ease-expo press-scale focus-ring touch-manipulation"
+          >
+            {isCollapsed ? (
+              <ChevronRight className="w-5 h-5 text-muted-foreground" />
+            ) : (
+              <ChevronLeft className="w-5 h-5 text-muted-foreground" />
+            )}
+          </button>
+        </div>
+
+        {/* Selector de Campus (desktop) */}
+        {!isCollapsed && (
+          <div className="px-3 pb-2">
+            <SelectorCampus />
+          </div>
+        )}
+
+        {/* Navegación */}
+        <nav className="flex-1 px-3 py-2 overflow-y-auto" aria-label="Navegación principal">
+          <ul className="space-y-0.5">
+            {primaryMenuItems
+              .filter((item) => canAccess(item, accessCredentials))
+              .map((item) => {
+                const Icon = item.icon
+                // Filter children by access — if none are visible, treat as simple link
+                const visibleChildren = item.children?.filter(
+                  (child) => canAccess(child, accessCredentials)
+                ) ?? []
+                // PR27 — platform items never carry `children: SubItem[]`
+                // (their view-item type has `children?: never`), but the
+                // talleres platform items still need a chevron so the
+                // submenu follows the same collapse/expand pattern as
+                // the static menu items ("Grupos de Vida", "Configuración").
+                // We detect the talleres prefix and treat those items as
+                // having children — the TalleresNavSubmenu is rendered
+                // in the standard submenu slot below.
+                const isTalleresPlatformItem = item.id.startsWith('platform-talleres_')
+                const hasChildren = visibleChildren.length > 0 || isTalleresPlatformItem
+                const parentActive = isParentActive(item)
+                const isOpen = openSubmenus.has(item.id)
+                const exactActive = pathname === item.href
+
+                return (
+                  <li key={item.id}>
+                    {hasChildren ? (
+                      <>
+                        {/* Parent item with chevron toggle */}
+                        <div className="flex items-center min-w-0">
+                          <SidebarLink
+                            href={item.href}
+                            ariaCurrent={exactActive ? "page" : undefined}
+                            className={cn(
+                              linkClasses(parentActive),
+                              "flex-1 min-w-0",
+                              !isCollapsed && "pr-1"
+                            )}
+                            onMouseEnter={(e) => showTooltip(e, item.label)}
+                            onMouseLeave={hideTooltip}
+                          >
+                            {parentActive && <ActivePill />}
+                            <Icon className={iconClasses(parentActive)} />
+
+                            {!isCollapsed && (
+                              <>
+                                <span className="font-medium truncate flex-1">{item.label}</span>
+                                {item.badge && (
+                                  <BadgeSistema
+                                    variante={item.badgeVariant || 'default'}
+                                    tamaño="sm"
+                                    className="ml-auto"
+                                  >
+                                    {item.badge}
+                                  </BadgeSistema>
+                                )}
+                              </>
+                            )}
+                          </SidebarLink>
+
+                          {/* Chevron button — only when expanded */}
+                          {!isCollapsed && (
+                            <button
+                              onClick={() => toggleSubmenu(item.id)}
+                              aria-label={isOpen ? `Cerrar submenú de ${item.label}` : `Abrir submenú de ${item.label}`}
+                              aria-expanded={isOpen}
+                              className={cn(
+                                "p-1.5 rounded-lg transition-colors duration-200 touch-manipulation",
+                                "hover:bg-[var(--brand-accent)]",
+                                parentActive ? "text-[var(--brand-primary)]" : "text-muted-foreground"
+                              )}
+                            >
+                              <ChevronDown className={cn(
+                                "w-4 h-4 transition-transform duration-200",
+                                isOpen && "rotate-180"
+                              )} />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Submenu items */}
+                        {!isCollapsed && (
+                          <div
+                            className={cn(
+                              "overflow-hidden transition-[max-height,opacity] duration-300 ease-expo",
+                              isOpen
+                                ? isTalleresPlatformItem
+                                  // PR51 — the talleres submenu can hold the
+                                  // full role union (up to ~22 items for a
+                                  // multi-capability admin), which overflows a
+                                  // 500px cap and clips the last item ("Grupos
+                                  // de Corto Plazo"). Bounded by TALLERES_NAV_ITEMS
+                                  // length, so a 1200px cap always fits every item
+                                  // while preserving the expand animation.
+                                  ? "max-h-[1200px] opacity-100"
+                                  : "max-h-[500px] opacity-100"
+                                : "max-h-0 opacity-0"
+                            )}
+                          >
+                            {isTalleresPlatformItem ? (
+                              /* PR27 — Talleres platform item renders the
+                                  role-grouped sub-menu via TalleresNavSubmenu
+                                  when the parent is open. TalleresNavSubmenu
+                                  emits its own <ul> with the same border-l
+                                  indentation as the static sub-menus, so the
+                                  visual matches the rest of the sidebar. */
+                              <TalleresNavSubmenu
+                                sessionCapabilities={
+                                  (platformSession?.capabilities ?? []).map((c) => c.key)
+                                }
+                                counters={{}}
+                              />
+                            ) : (
+                              <ul className="ml-4 pl-3 mt-1 mb-1 space-y-0.5 border-l border-border/50">
+                                {visibleChildren
+                                  .map((child) => {
+                                    const ChildIcon = child.icon
+                                    const childActive = isActive(child.href)
+                                    return (
+                                      <li key={child.id}>
+                                        <SidebarLink
+                                          href={child.href}
+                                          ariaCurrent={childActive ? "page" : undefined}
+                                          className={subLinkClasses(childActive)}
+                                        >
+                                          {ChildIcon && (
+                                            <ChildIcon className={cn(
+                                              "w-4 h-4 flex-shrink-0 transition-colors",
+                                              childActive ? "text-[var(--brand-primary)]" : "text-muted-foreground group-hover:text-foreground"
+                                            )} />
+                                          )}
+                                          <span className="truncate">{child.label}</span>
+                                        </SidebarLink>
+                                      </li>
+                                    )
+                                  })}
+                              </ul>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      /* Simple item (no children) */
+                      <SidebarLink
+                        href={item.href}
+                        ariaCurrent={parentActive ? "page" : undefined}
+                        className={linkClasses(parentActive)}
+                        onMouseEnter={(e) => showTooltip(e, item.label)}
+                        onMouseLeave={hideTooltip}
+                      >
+                        {parentActive && <ActivePill />}
+                        <Icon className={iconClasses(parentActive)} />
+
+                        {!isCollapsed && (
+                          <>
+                            <span className="font-medium truncate">{item.label}</span>
+                            {item.badge && (
+                              <BadgeSistema
+                                variante={item.badgeVariant || 'default'}
+                                tamaño="sm"
+                                className="ml-auto"
+                              >
+                                {item.badge}
+                              </BadgeSistema>
+                            )}
+                          </>
+                        )}
+                      </SidebarLink>
+                    )}
+                  </li>
+                )
+              })}
+          </ul>
+        </nav>
+
+        {/* Footer con tema, perfil y logout */}
+        <div className="mt-auto p-3 border-t border-[var(--glass-border)] space-y-0.5">
+          {/* Theme Toggle — same layout as other footer items */}
+          <div
+            className={cn(
+              "flex items-center gap-3 px-3 py-2 rounded-xl group relative w-full min-h-[44px]",
+              "transition-[background-color,color,transform] duration-200 ease-expo",
+              "text-foreground hover:bg-[var(--brand-accent)] hover:text-foreground",
+              "touch-manipulation cursor-pointer",
+              isCollapsed && "justify-center px-2"
+            )}
+            onMouseEnter={(e) => showTooltip(e, 'Tema')}
+            onMouseLeave={hideTooltip}
+          >
+            <ThemeToggle className={cn(
+              "!min-h-0 !min-w-0 !p-0 !bg-transparent !border-0 !shadow-none !ring-0 !rounded-none flex-shrink-0",
+              isCollapsed ? "!w-6 !h-6" : "!w-5 !h-5"
+            )} />
+            {!isCollapsed && (
+              <span className="font-medium pointer-events-none">Tema</span>
+            )}
+          </div>
+
+          {/* Mi Perfil */}
+          <SidebarLink
+            href="https://miembros.yosoyglobal.org/perfil"
+            className={linkClasses(false)}
+            onMouseEnter={(e) => showTooltip(e, 'Mi Perfil')}
+            onMouseLeave={hideTooltip}
+          >
+            <User className={cn(
+              "flex-shrink-0 transition-colors text-muted-foreground group-hover:text-foreground",
+              isCollapsed ? "w-6 h-6" : "w-5 h-5"
+            )} />
+
+            {!isCollapsed && (
+              <span className="font-medium">Mi Perfil</span>
+            )}
+          </SidebarLink>
+
+          {/* Cerrar Sesión */}
+          <button
+            onClick={confirmLogout}
+            aria-label="Cerrar sesión"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2 rounded-xl group relative w-full text-left min-h-[44px]",
+              "transition-[background-color,color,transform] duration-200 ease-expo",
+              "press-scale focus-ring touch-manipulation",
+              "text-foreground hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400",
+              isCollapsed && "justify-center px-2"
+            )}
+            onMouseEnter={(e) => showTooltip(e, 'Cerrar Sesión')}
+            onMouseLeave={hideTooltip}
+          >
+            <LogOut className={cn(
+              "flex-shrink-0 transition-colors text-muted-foreground group-hover:text-red-600 dark:group-hover:text-red-400",
+              isCollapsed ? "w-6 h-6" : "w-5 h-5"
+            )} />
+
+            {!isCollapsed && (
+              <span className="font-medium">Cerrar Sesión</span>
+            )}
+          </button>
+        </div>
+
+        {/* Fixed tooltip — renders outside scroll containers */}
+        {isCollapsed && tooltip && (
+          <div
+            className="fixed z-[9999] px-3 py-1.5 glass-panel-elevated text-foreground text-sm rounded-lg whitespace-nowrap pointer-events-none animate-fade-in"
+            style={{ top: tooltip.top, left: sidebarWidth + 8, transform: 'translateY(-50%)' }}
+          >
+            {tooltip.label}
+            <div className="absolute top-1/2 -left-1 -translate-y-1/2 w-2 h-2 bg-[var(--glass-bg-elevated)] rotate-45 border-l border-b border-[var(--glass-border)]" />
+          </div>
+        )}
+      </div>
+
+      {/* Modal de confirmación de logout — Liquid Glass */}
+      {showLogoutModal && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] animate-fade-in"
+          onClick={() => setShowLogoutModal(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="logout-modal-title"
+        >
+          <div
+            className="glass-panel-elevated rounded-2xl p-6 max-w-md mx-4 animate-bounce-spring"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="logout-modal-title" className="text-lg font-semibold text-foreground mb-4">
+              ¿Estás seguro que deseas cerrar sesión?
+            </h3>
+            <p className="text-muted-foreground mb-6">
+              Se cerrará tu sesión actual y serás redirigido a la página de inicio.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowLogoutModal(false)}
+                className="px-4 py-2.5 min-h-[44px] text-foreground bg-secondary hover:bg-secondary/80 rounded-xl transition-[background-color,transform] duration-200 ease-expo press-scale focus-ring touch-manipulation"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleLogout}
+                className="px-4 py-2.5 min-h-[44px] text-white bg-red-600 hover:bg-red-700 rounded-xl transition-[background-color,transform] duration-200 ease-expo press-scale focus-ring touch-manipulation"
+              >
+                Cerrar Sesión
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </>
+  )
+}
+
+function parseSidebarCollapsed(saved: string | null): boolean {
+  if (saved === null) return false
+  const parsed = JSON.parse(saved)
+  return parsed === true || parsed === false ? parsed : false
+}
+
+/** Hook para leer el estado colapsado del sidebar desde localStorage. */
+export function useSidebarModerna() {
+  const [isCollapsed, setIsCollapsed] = useState(false)
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem('sidebar-collapsed')
+    /* eslint-disable react-hooks/set-state-in-effect -- restoring persisted UI preference after mount (pre-existing pattern) */
+    setIsCollapsed(parseSidebarCollapsed(saved))
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [])
+
+  return { isCollapsed }
+}

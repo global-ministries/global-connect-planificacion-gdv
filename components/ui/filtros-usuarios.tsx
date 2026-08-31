@@ -1,0 +1,343 @@
+"use client"
+
+import { useState } from "react"
+import { X, Filter as FilterIcon, ChevronDown } from "lucide-react"
+import { Button } from "./button"
+import { Badge } from "./badge"
+
+export interface FiltrosUsuarios {
+  roles: string[]
+  conEmail: boolean | null
+  conTelefono: boolean | null
+  enGrupo: boolean | null
+  estado: string[]
+}
+
+interface FiltrosUsuariosProps {
+  filtros: FiltrosUsuarios
+  onFiltrosChange: (filtros: FiltrosUsuarios) => void
+  rolesDisponibles: { nombre_interno: string; nombre_visible: string }[]
+  onLimpiarFiltros: () => void
+}
+
+export function FiltrosUsuarios({
+  filtros,
+  onFiltrosChange,
+  rolesDisponibles,
+  onLimpiarFiltros,
+}: FiltrosUsuariosProps) {
+  const [isOpen, setIsOpen] = useState(false)
+
+  const toggleRol = (rolInterno: string) => {
+    const nuevosRoles = filtros.roles.includes(rolInterno)
+      ? filtros.roles.filter(r => r !== rolInterno)
+      : [...filtros.roles, rolInterno]
+
+    onFiltrosChange({ ...filtros, roles: nuevosRoles })
+  }
+
+  const setConEmail = (valor: boolean) => {
+    const nuevoValor: boolean | null = filtros.conEmail === valor ? null : valor
+    onFiltrosChange({ ...filtros, conEmail: nuevoValor })
+  }
+
+  const setConTelefono = (valor: boolean) => {
+    const nuevoValor: boolean | null = filtros.conTelefono === valor ? null : valor
+    onFiltrosChange({ ...filtros, conTelefono: nuevoValor })
+  }
+
+  const setEnGrupo = (valor: boolean) => {
+    const nuevoValor: boolean | null = filtros.enGrupo === valor ? null : valor
+    onFiltrosChange({ ...filtros, enGrupo: nuevoValor })
+  }
+
+  const toggleEstado = (estado: string) => {
+    const nuevosEstados = filtros.estado.includes(estado)
+      ? filtros.estado.filter(e => e !== estado)
+      : [...filtros.estado, estado]
+
+    onFiltrosChange({ ...filtros, estado: nuevosEstados })
+  }
+
+  const tieneFiltrosActivos = () => {
+    return filtros.roles.length > 0 ||
+      filtros.conEmail !== null ||
+      filtros.conTelefono !== null ||
+      filtros.enGrupo !== null ||
+      filtros.estado.length > 0
+  }
+
+  const obtenerTextoFiltroEmail = () => {
+    if (filtros.conEmail === true) return "Con email"
+    if (filtros.conEmail === false) return "Sin email"
+    return "Email"
+  }
+
+  const obtenerTextoFiltroTelefono = () => {
+    if (filtros.conTelefono === true) return "Con teléfono"
+    if (filtros.conTelefono === false) return "Sin teléfono"
+    return "Teléfono"
+  }
+
+  const obtenerTextoFiltroEnGrupo = () => {
+    if (filtros.enGrupo === true) return "En grupo"
+    if (filtros.enGrupo === false) return "Sin grupo"
+    return "Grupos"
+  }
+
+  return (
+    <div className="relative">
+      <Button
+        variant="outline"
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-2"
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+      >
+        <FilterIcon className="w-4 h-4" />
+        Filtros
+        {tieneFiltrosActivos() && (
+          <Badge variant="secondary" className="ml-1">
+            {filtros.roles.length +
+              (filtros.conEmail !== null ? 1 : 0) +
+              (filtros.conTelefono !== null ? 1 : 0) +
+              (filtros.enGrupo !== null ? 1 : 0) +
+              filtros.estado.length}
+          </Badge>
+        )}
+        <ChevronDown className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </Button>
+
+      {isOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          onClick={() => setIsOpen(false)}
+          aria-hidden="true"
+        >
+          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative z-10 w-full max-w-md md:max-w-lg bg-card border border-border rounded-2xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-foreground">Filtros</h3>
+                <div className="flex items-center gap-2">
+                  {tieneFiltrosActivos() && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={onLimpiarFiltros}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      Limpiar
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setIsOpen(false)}
+                    aria-label="Cerrar"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Filtro por Roles */}
+              <div className="mb-4">
+                <h4 className="text-sm font-medium text-foreground mb-2">Roles</h4>
+                <div className="flex flex-wrap gap-2">
+                  {rolesDisponibles.map((rol) => (
+                    <Button
+                      key={rol.nombre_interno}
+                      variant={filtros.roles.includes(rol.nombre_interno) ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => toggleRol(rol.nombre_interno)}
+                      className="text-xs"
+                    >
+                      {rol.nombre_visible}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Filtro por Email */}
+              <div className="mb-4">
+                <h4 className="text-sm font-medium text-foreground mb-2">Estado del Email</h4>
+                <div className="flex gap-2">
+                  <Button
+                    variant={filtros.conEmail === true ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setConEmail(true)}
+                    className="text-xs"
+                  >
+                    Con email
+                  </Button>
+                  <Button
+                    variant={filtros.conEmail === false ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setConEmail(false)}
+                    className="text-xs"
+                  >
+                    Sin email
+                  </Button>
+                </div>
+              </div>
+
+              {/* Filtro por Teléfono */}
+              <div className="mb-4">
+                <h4 className="text-sm font-medium text-foreground mb-2">Estado del Teléfono</h4>
+                <div className="flex gap-2">
+                  <Button
+                    variant={filtros.conTelefono === true ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setConTelefono(true)}
+                    className="text-xs"
+                  >
+                    Con teléfono
+                  </Button>
+                  <Button
+                    variant={filtros.conTelefono === false ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setConTelefono(false)}
+                    className="text-xs"
+                  >
+                    Sin teléfono
+                  </Button>
+                </div>
+              </div>
+
+              {/* Filtro por pertenencia a Grupos */}
+              <div className="mb-4">
+                <h4 className="text-sm font-medium text-foreground mb-2">Pertenencia a Grupos</h4>
+                <div className="flex gap-2">
+                  <Button
+                    variant={filtros.enGrupo === true ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setEnGrupo(true)}
+                    className="text-xs"
+                  >
+                    En grupo
+                  </Button>
+                  <Button
+                    variant={filtros.enGrupo === false ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setEnGrupo(false)}
+                    className="text-xs"
+                  >
+                    Sin grupo
+                  </Button>
+                </div>
+              </div>
+
+              {/* Filtro por Estado */}
+              <div className="mb-4">
+                <h4 className="text-sm font-medium text-foreground mb-2">Estado del Usuario</h4>
+                <div className="flex gap-2">
+                  <Button
+                    variant={filtros.estado.includes('activo') ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => toggleEstado('activo')}
+                    className="text-xs"
+                  >
+                    Activo
+                  </Button>
+                  <Button
+                    variant={filtros.estado.includes('inactivo') ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => toggleEstado('inactivo')}
+                    className="text-xs"
+                  >
+                    Inactivo
+                  </Button>
+                </div>
+              </div>
+
+              {/* Filtros Activos */}
+              {tieneFiltrosActivos() && (
+                <div className="pt-3 border-t border-border">
+                  <h4 className="text-sm font-medium text-foreground mb-2">Filtros Activos</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {filtros.roles.map((rol) => {
+                      const rolInfo = rolesDisponibles.find(r => r.nombre_interno === rol)
+                      return (
+                        <Badge
+                          key={rol}
+                          variant="secondary"
+                          className="flex items-center gap-1"
+                        >
+                          {rolInfo?.nombre_visible || rol}
+                          <button
+                            onClick={() => toggleRol(rol)}
+                            className="ml-1 hover:bg-muted-foreground/20 rounded-full p-0.5"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </Badge>
+                      )
+                    })}
+
+                    {filtros.conEmail !== null && (
+                      <Badge variant="secondary" className="flex items-center gap-1">
+                        {obtenerTextoFiltroEmail()}
+                        <button
+                          onClick={() => setConEmail(filtros.conEmail === true ? true : false)}
+                          className="ml-1 hover:bg-muted-foreground/20 rounded-full p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    )}
+
+                    {filtros.conTelefono !== null && (
+                      <Badge variant="secondary" className="flex items-center gap-1">
+                        {obtenerTextoFiltroTelefono()}
+                        <button
+                          onClick={() => setConTelefono(filtros.conTelefono === true ? true : false)}
+                          className="ml-1 hover:bg-muted-foreground/20 rounded-full p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    )}
+
+                    {filtros.enGrupo !== null && (
+                      <Badge variant="secondary" className="flex items-center gap-1">
+                        {obtenerTextoFiltroEnGrupo()}
+                        <button
+                          onClick={() => setEnGrupo(filtros.enGrupo === true ? true : false)}
+                          className="ml-1 hover:bg-muted-foreground/20 rounded-full p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    )}
+
+                    {filtros.estado.map((estado) => (
+                      <Badge
+                        key={estado}
+                        variant="secondary"
+                        className="flex items-center gap-1"
+                      >
+                        {estado === 'activo' ? 'Activo' : 'Inactivo'}
+                        <button
+                          onClick={() => toggleEstado(estado)}
+                          className="ml-1 hover:bg-muted-foreground/20 rounded-full p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

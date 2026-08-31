@@ -1,0 +1,32 @@
+name: RLS Tests
+
+on:
+  # Manual trigger only for controlled staging validation
+  workflow_dispatch:
+
+jobs:
+  rls-tests:
+    runs-on: ubuntu-latest
+    environment: staging
+    concurrency:
+      group: rls-tests-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run RLS Policy Tests
+        env:
+          RLS_ENV: staging
+          ALLOW_MUTATING_RLS_TESTS: "false"
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL_STAGING }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY_STAGING }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY_STAGING }}
+        run: node supabase/tests/run-rls-tests.mjs

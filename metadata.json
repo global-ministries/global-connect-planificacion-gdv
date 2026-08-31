@@ -1,0 +1,8 @@
+{
+  "name": "global-connect-planificacion-gdv",
+  "description": "Sistema de gestión y planificador inteligente de Grupos de Vida (GDV) para GlobalConnect",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,15 @@
+export const PASTORAL_TEMPLATE_KEYS = {
+  CRISIS_ALERT: "pastoral.crisis_alert.v1",
+  ONE_ON_ONE_SCHEDULED: "pastoral.one_on_one_scheduled.v1",
+  ONE_ON_ONE_REMINDER: "pastoral.one_on_one_reminder.v1",
+  ONE_ON_ONE_COMPLETED: "pastoral.one_on_one_completed.v1",
+  ONE_ON_ONE_CANCELLED: "pastoral.one_on_one_cancelled.v1",
+  ONE_ON_ONE_NOTE_LOGGED: "pastoral.one_on_one_note_logged.v1",
+  ONE_ON_ONE_STEP_VALIDATED: "pastoral.one_on_one_step_validated.v1",
+  TRIADA_FORMED: "pastoral.triada_formed.v1",
+  TRIADA_DISBANDED: "pastoral.triada_disbanded.v1",
+  TRIADA_MEMBER_ADDED: "pastoral.triada_member_added.v1",
+  TRIADA_MEMBER_REMOVED: "pastoral.triada_member_removed.v1",
+  TRIADA_STEP_SUGGESTED: "pastoral.triada_step_suggested.v1",
+  TRIADA_STEP_VALIDATED: "pastoral.triada_step_validated.v1",
+} as const
