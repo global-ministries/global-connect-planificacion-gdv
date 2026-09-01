@@ -2,8 +2,8 @@
 
 import { Lock, Mail, Eye, EyeOff } from "lucide-react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
 import { useState, useEffect } from "react"
+import { login } from "@/lib/actions/auth.actions"
 import { createClient } from "@/lib/supabase/client"
 import { LogoGlobalConnect } from "@/components/ui/logo-global-connect"
 import {
@@ -17,7 +17,6 @@ import {
 } from "@/components/ui/sistema-diseno"
 
 export default function PaginaLogin() {
-  const router = useRouter()
   const [mostrarContrasena, setMostrarContrasena] = useState(false)
   const [email, setEmail] = useState("")
   const [contrasena, setContrasena] = useState("")
@@ -47,7 +46,6 @@ export default function PaginaLogin() {
 
   const manejarSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    e.stopPropagation()
 
     if (!email.trim() || !contrasena) {
       setError("Por favor ingresa tu correo y contraseña.")
@@ -58,34 +56,23 @@ export default function PaginaLogin() {
     setError("")
 
     try {
-      const supabase = createClient()
-      const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: contrasena,
-      })
-
-      if (authError) {
-        const msg = authError.message.toLowerCase()
-        if (msg.includes("invalid login credentials") || msg.includes("invalid_grant")) {
-          setError("Correo o contraseña incorrectos. Verifica tus credenciales.")
-        } else if (msg.includes("email not confirmed")) {
-          setError("Tu correo electrónico no ha sido confirmado. Revisa tu bandeja de entrada.")
-        } else {
-          setError(authError.message || "Error al iniciar sesión.")
-        }
+      const result = await login(new FormData(e.currentTarget))
+      if (result?.error) {
+        setError(result.error)
         setCargando(false)
-        return
       }
+      // Si no hay error, la función login() redirige automáticamente
+      // No necesitamos hacer nada más aquí
+    } catch (err) {
+      // Solo mostrar error si no es una redirección exitosa
+      const errorMessage = err instanceof Error ? err.message : String(err)
 
-      if (data?.session || data?.user) {
-        window.location.href = "/planner"
-      } else {
-        window.location.href = "/planner"
+      // Si el error contiene "NEXT_REDIRECT", es una redirección exitosa
+      if (!errorMessage.includes('NEXT_REDIRECT')) {
+        setError("Error al iniciar sesión. Inténtalo de nuevo.")
+        setCargando(false)
       }
-    } catch (err: any) {
-      console.error("Error al iniciar sesión:", err)
-      setError(err?.message || "Error inesperado al conectar. Inténtalo de nuevo.")
-      setCargando(false)
+      // Si es NEXT_REDIRECT, no hacer nada - la redirección está en progreso
     }
   }
 
@@ -106,7 +93,7 @@ export default function PaginaLogin() {
         </div>
 
         {/* Formulario de Login */}
-        <form method="POST" action="#" className="space-y-6" onSubmit={manejarSubmit}>
+        <form className="space-y-6" onSubmit={manejarSubmit}>
           {/* Campo Email */}
           <InputSistema
             label="Correo electrónico"
@@ -166,7 +153,7 @@ export default function PaginaLogin() {
             tamaño="lg"
             cargando={cargando}
             className="w-full"
-            disabled={cargando}
+            disabled={!email || !contrasena}
           >
             {cargando ? "Iniciando sesión..." : "Iniciar sesión"}
           </BotonSistema>
