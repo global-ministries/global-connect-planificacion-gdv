@@ -138,7 +138,6 @@ export function HeaderMovil({ titulo }: HeaderMovilProps) {
         }
       }
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- sincronización de submenús activos con la ruta actual (patrón preexistente)
     setOpenSubmenus(prev => {
       const merged = new Set(prev)
       newOpen.forEach(id => merged.add(id))
@@ -160,7 +159,6 @@ export function HeaderMovil({ titulo }: HeaderMovilProps) {
 
   // Close on route change
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- cierre del drawer al navegar (patrón preexistente)
     setDrawerOpen(false)
     setUserMenuOpen(false)
   }, [pathname])

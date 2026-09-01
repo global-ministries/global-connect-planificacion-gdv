@@ -177,9 +177,7 @@ export function SidebarModerna({ className }: SidebarModernaProps) {
   // Restore collapsed preference after mount to avoid SSR/client mismatch (#224)
   useEffect(() => {
     const saved = window.localStorage.getItem('sidebar-collapsed')
-    /* eslint-disable react-hooks/set-state-in-effect -- restoring persisted UI preference after mount (pre-existing pattern) */
     setIsCollapsed(parseSidebarCollapsed(saved))
-    /* eslint-enable react-hooks/set-state-in-effect */
   }, [])
   const effectiveRoles = useCachedAccessCredentials({ values: roles, loading, isSignedIn: !!usuario })
   const effectiveSupportCapabilities = useCachedAccessCredentials({ values: supportCapabilities, loading, isSignedIn: !!usuario })
@@ -259,7 +257,6 @@ export function SidebarModerna({ className }: SidebarModernaProps) {
         newOpen.add(item.id)
       }
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- sincronización de submenús activos con la ruta actual (patrón preexistente)
     setOpenSubmenus(prev => {
       // Merge: keep manually opened ones, add auto-opened ones
       const merged = new Set(prev)
@@ -738,9 +735,7 @@ export function useSidebarModerna() {
 
   useEffect(() => {
     const saved = window.localStorage.getItem('sidebar-collapsed')
-    /* eslint-disable react-hooks/set-state-in-effect -- restoring persisted UI preference after mount (pre-existing pattern) */
     setIsCollapsed(parseSidebarCollapsed(saved))
-    /* eslint-enable react-hooks/set-state-in-effect */
   }, [])
 
   return { isCollapsed }
