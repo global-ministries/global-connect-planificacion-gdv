@@ -93,7 +93,7 @@ export default function PaginaLogin() {
         </div>
 
         {/* Formulario de Login */}
-        <form className="space-y-6" onSubmit={manejarSubmit}>
+        <form method="post" className="space-y-6" onSubmit={manejarSubmit}>
           {/* Campo Email */}
           <InputSistema
             label="Correo electrónico"
