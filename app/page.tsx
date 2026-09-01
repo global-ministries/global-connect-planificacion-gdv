@@ -153,7 +153,7 @@ export default function PaginaLogin() {
             tamaño="lg"
             cargando={cargando}
             className="w-full"
-            disabled={!email || !contrasena}
+            disabled={cargando}
           >
             {cargando ? "Iniciando sesión..." : "Iniciar sesión"}
           </BotonSistema>
