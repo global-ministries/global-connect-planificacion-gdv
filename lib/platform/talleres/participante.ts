@@ -1,36 +1,528 @@
-import { createClient } from '@/lib/supabase/server'
+/**
+ * PR18 — Shared helpers for participante RSC pages.
+ *
+ * Centralizes:
+ *   - kill-switch check (404 when isTalleresEnabled is off)
+ *   - capability gate (`participation.read`)
+ *   - session lookup via resolveReadOnlyPlatformSession
+ *   - common Supabase queries used by all 4 participante pages
+ *
+ * Per design §9 the participante surface is summary-only — no
+ * administrative details, no asistencia rows, no motivos. The
+ * `loadParticipanteTalleres`, `loadParticipanteCertificados`,
+ * `loadParticipanteInscripciones` helpers below all project through
+ * the route-integration contract (PR14) when applicable.
+ */
 
-export async function requireParticipante() {
-  const supabase = await createClient()
-  return { user: { id: "user-1" }, personaId: "persona-1", supabase }
+import { notFound, redirect } from 'next/navigation'
+
+import { createSupabaseServerClient } from '@/lib/supabase/server'
+import {
+  findPlatformSessionPersonaByAuthId,
+  resolveReadOnlyPlatformSession,
+} from '@/lib/auth/platformSessionReadOnly'
+import { isTalleresEnabled } from '@/lib/platform/talleres/flags'
+
+export interface ParticipanteContext {
+  readonly supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>
+  readonly personaId: string
+  readonly capabilities: readonly string[]
 }
 
-export async function requireExplorarViewer() {
-  const supabase = await createClient()
-  return { user: { id: "user-1" }, personaId: "persona-1", supabase }
+/**
+ * Shared viewer-context resolver for the participante surface.
+ *
+ * Returns `{ ok: false }` when:
+ *   - the talleres feature flag is off (kill switch)
+ *   - the user is not authenticated
+ *   - the session/persona cannot be resolved
+ *   - `requireParticipationRead` is true AND the user lacks
+ *     `participation.read` (deny-by-default for the participant-only pages)
+ *
+ * When `requireParticipationRead` is false the gate opens for ANY
+ * authenticated user with a resolvable persona, preserving whatever
+ * capabilities they hold (finding #1, Option B — self-enroll must be
+ * reachable before you are a participant).
+ */
+async function resolveViewerContext(
+  requireParticipationRead: boolean,
+): Promise<{ ok: true; context: ParticipanteContext } | { ok: false }> {
+  if (!isTalleresEnabled()) return { ok: false }
+
+  const supabase = await createSupabaseServerClient()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- server client
+  const { data: { user } } = await (supabase as any).auth.getUser()
+  if (!user) return { ok: false }
+
+  const session = await resolveReadOnlyPlatformSession({
+    subjectAuthId: user.id,
+    findPersonaByAuthId: (authId) =>
+      findPlatformSessionPersonaByAuthId(supabase, authId),
+    capabilitySupabase: supabase,
+  })
+  if (!session) return { ok: false }
+
+  if (requireParticipationRead) {
+    const hasParticipationRead = session.capabilities.some(
+      (c) => c.key === 'talleres_crecimiento.participation.read',
+    )
+    if (!hasParticipationRead) return { ok: false }
+  }
+
+  return {
+    ok: true,
+    context: {
+      supabase,
+      personaId: session.personaId,
+      capabilities: session.capabilities.map((c) => c.key),
+    },
+  }
 }
 
-export async function loadParticipanteCertificado(id: string) {
-  return { id, taller: { nombre: "Taller Crecimiento" }, fecha: new Date().toISOString() }
+/**
+ * Loads the participante context used by the participant-only pages in
+ * `app/(auth)/talleres/**` (mis-talleres, historial, certificados).
+ * Returns `{ ok: false }` when:
+ *   - the talleres feature flag is off (404 via notFound())
+ *   - the user is not authenticated (redirect to /login)
+ *   - the user lacks `participation.read` (404 via notFound() — deny-by-default)
+ */
+export async function loadParticipanteContext(): Promise<
+  { ok: true; context: ParticipanteContext } | { ok: false }
+> {
+  return resolveViewerContext(true)
 }
 
-export async function loadParticipanteCertificados(ctx?: any) {
-  return []
+/**
+ * Finding #1 (Option B) — viewer context for `/talleres/explorar`.
+ *
+ * Same shape as `loadParticipanteContext` but WITHOUT the
+ * `participation.read` requirement: /talleres/explorar must be reachable
+ * by any authenticated user, with any role or none, because enrolling is
+ * how a user becomes a participant. The RLS layer is the real security
+ * wall (SELECT scoped to open/active rows, INSERT forced to a pending
+ * self-enroll). The capability set is preserved so downstream reads still
+ * reflect whatever the viewer holds.
+ */
+export async function loadExplorarViewerContext(): Promise<
+  { ok: true; context: ParticipanteContext } | { ok: false }
+> {
+  return resolveViewerContext(false)
 }
 
-export async function loadParticipanteExplorar(ctx?: any) {
-  return []
+/**
+ * Triggers the Next.js not-found page when the participant context
+ * cannot be loaded. Use in page components: `await
+ * requireParticipante()` and let it short-circuit.
+ */
+export async function requireParticipante(): Promise<ParticipanteContext> {
+  const result = await loadParticipanteContext()
+  if (!result.ok) {
+    // Distinguish: no session → redirect to login; otherwise → 404.
+    const supabase = await createSupabaseServerClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- server client
+    const { data: { user } } = await (supabase as any).auth.getUser()
+    if (!user) redirect('/login')
+    notFound()
+  }
+  return result.context
 }
 
-export async function loadParticipanteHistorial(ctx?: any) {
-  return []
+/**
+ * Finding #1 (Option B) — page guard for `/talleres/explorar`. Mirrors
+ * `requireParticipante()` (redirect to /login when unauthenticated,
+ * notFound() otherwise) but uses the any-authenticated viewer context so
+ * a user with no talleres capability can still reach the enroll page.
+ */
+export async function requireExplorarViewer(): Promise<ParticipanteContext> {
+  const result = await loadExplorarViewerContext()
+  if (!result.ok) {
+    const supabase = await createSupabaseServerClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- server client
+    const { data: { user } } = await (supabase as any).auth.getUser()
+    if (!user) redirect('/login')
+    notFound()
+  }
+  return result.context
 }
 
-export async function loadParticipanteActiveTalleres(ctx?: any) {
-  return []
+// ─── Participant queries ──────────────────────────────────────────────────
+
+export interface ParticipanteTallerSummary {
+  readonly id: string
+  readonly nombre: string
+  readonly tipo: 'individual' | 'pareja'
+  readonly edicion: string
+  readonly estado_inscripcion: 'pendiente' | 'aprobado' | 'no_aprobado' | 'completado'
+  readonly unit_estado: 'completado' | 'no_completado' | 'abandono' | null
+  readonly fecha_completitud: string | null
+  readonly estado_taller: 'borrador' | 'abierto' | 'en_curso' | 'cerrado' | 'cancelado'
 }
 
-export async function getTalleresParticipante(userId?: string) {
-  return { misTalleres: [], certificados: [], historial: [] }
+/**
+ * Loads the participant's active inscripciones (estado in pendiente/aprobado
+ * OR unit_estado is null) — used by /talleres/mis-talleres. The participant
+ * only sees the SUMMARY projection — no motivos, no sesiones, no reportes.
+ */
+export async function loadParticipanteActiveTalleres(
+  ctx: ParticipanteContext
+): Promise<readonly ParticipanteTallerSummary[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- server client
+  const client: any = ctx.supabase
+  // PR42 — joined-relationship fix. The previous embedded join
+  // `taller:taller_ediciones (...)` returned `{ data: null, error: ... }`
+  // because `taller_inscripciones.taller_id` could be inferred against
+  // the wrong FK direction (the column has a FK to `talleres` AND
+  // effectively anchors the row to `taller_ediciones` in the canonical
+  // model). PostgREST's embedded-resource inference is brittle when
+  // multiple FKs exist between two tables. The explicit `!taller_id`
+  // hint forces the join to follow the `taller_inscripciones.taller_id
+  // → taller_ediciones.id` edge — mirroring the PR38 fix that
+  // unblocked `loadParticipanteExplorar`.
+  const { data, error } = await client
+    .from('taller_inscripciones')
+    .select(
+      `id, estado, unit_estado,
+       taller:taller_ediciones!taller_id (
+         id, nombre_snapshot, tipo, estado,
+         abstracto:talleres!taller_id (id, nombre)
+       ),
+       certificado:taller_certificados!inscripcion_id (fecha_completitud)`,
+    )
+    .eq('persona_principal_id', ctx.personaId)
+    .in('estado', ['pendiente', 'aprobado'])
+    .order('created_at', { ascending: false })
+
+  if (error) return []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- typed via the select above
+  return ((data ?? []) as any[]).flatMap((row) => {
+    const t = row.taller
+    if (!t) return []
+    return [
+      {
+        id: t.id as string,
+        // PR44 — the abstract taller name is the title; the snapshot is the
+        // edition label ("Septiembre 2026"). `taller_ediciones` has no
+        // `edicion` column, so the previous `t.edicion` was always undefined.
+        nombre: (t.abstracto?.nombre as string | undefined) ?? (t.nombre_snapshot as string),
+        tipo: t.tipo as 'individual' | 'pareja',
+        edicion: t.nombre_snapshot as string,
+        estado_inscripcion: row.estado as 'pendiente' | 'aprobado',
+        unit_estado: (row.unit_estado as 'completado' | 'no_completado' | 'abandono' | null) ?? null,
+        // PR44 — `taller_inscripciones` has NO `fecha_completitud` column;
+        // the real completion date lives on `taller_certificados` (1:1 via
+        // inscripcion_id). Null for active talleres without a certificate.
+        fecha_completitud: (row.certificado?.fecha_completitud as string | null) ?? null,
+        estado_taller: t.estado as 'borrador' | 'abierto' | 'en_curso' | 'cerrado' | 'cancelado',
+      },
+    ]
+  })
 }
 
+export interface ParticipanteHistorialRow {
+  readonly id: string
+  readonly nombre: string
+  readonly edicion: string
+  readonly estado_inscripcion: 'pendiente' | 'aprobado' | 'no_aprobado' | 'completado'
+  readonly unit_estado: 'completado' | 'no_completado' | 'abandono' | null
+  readonly fecha_completitud: string | null
+  readonly fecha_inscripcion: string
+}
+
+/**
+ * Loads the participant's full longitudinal history (every inscripcion
+ * ever, including cancelled / no-aprobado). Used by /talleres/historial.
+ */
+export async function loadParticipanteHistorial(
+  ctx: ParticipanteContext
+): Promise<readonly ParticipanteHistorialRow[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- server client
+  const client: any = ctx.supabase
+  // PR42 — joined-relationship fix (same as `loadParticipanteActiveTalleres`).
+  // The unhesitant `taller:taller_ediciones (...)` shape is brittle when
+  // multiple FKs exist between two tables; the explicit `!taller_id`
+  // hint forces PostgREST to follow the intended FK edge.
+  const { data, error } = await client
+    .from('taller_inscripciones')
+    .select(
+      `id, estado, unit_estado, created_at,
+       taller:taller_ediciones!taller_id (
+         id, nombre_snapshot,
+         abstracto:talleres!taller_id (id, nombre)
+       ),
+       certificado:taller_certificados!inscripcion_id (fecha_completitud)`,
+    )
+    .eq('persona_principal_id', ctx.personaId)
+    .order('created_at', { ascending: false })
+
+  if (error) return []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- typed via the select above
+  return ((data ?? []) as any[]).flatMap((row) => {
+    const t = row.taller
+    if (!t) return []
+    return [
+      {
+        id: row.id as string,
+        // PR44 — abstract taller name is the title; snapshot is the edition.
+        nombre: (t.abstracto?.nombre as string | undefined) ?? (t.nombre_snapshot as string),
+        edicion: t.nombre_snapshot as string,
+        estado_inscripcion: row.estado as 'pendiente' | 'aprobado' | 'no_aprobado' | 'completado',
+        unit_estado: (row.unit_estado as 'completado' | 'no_completado' | 'abandono' | null) ?? null,
+        // PR44 — completion date comes from the certificate (1:1), not
+        // from `taller_inscripciones` (column does not exist).
+        fecha_completitud: (row.certificado?.fecha_completitud as string | null) ?? null,
+        fecha_inscripcion: row.created_at as string,
+      },
+    ]
+  })
+}
+
+export interface ParticipanteCertificado {
+  readonly id: string
+  readonly codigo_verificacion: string
+  readonly taller_id: string
+  readonly nombre_taller_snapshot: string
+  readonly fecha_completitud: string
+  readonly revocado_at: string | null
+}
+
+export interface ParticipanteExplorarRow {
+  /** edicion id (taller_ediciones.id). */
+  readonly id: string
+  /**
+   * Abstract taller name (talleres.nombre) — e.g. "Matrimonio sobre la Roca".
+   * Falls back to the edicion's nombre_snapshot when the abstract taller
+   * could not be joined (legacy data edge case).
+   */
+  readonly nombre: string
+  /** Stable URL-safe slug for the abstract taller (talleres.slug). */
+  readonly slug: string
+  readonly tipo: 'individual' | 'pareja'
+  /**
+   * Couple link type for `tipo === 'pareja'` ediciones (null for
+   * individual). Surfaced so the explorar client knows whether to open
+   * the cónyuge picker and which link_type to send on self-enroll (PR G).
+   */
+  readonly link_type: 'matrimonio' | 'novios' | null
+  readonly edicion: string
+  readonly estado: 'borrador' | 'abierto' | 'en_curso' | 'cerrado' | 'cancelado'
+  readonly ya_inscrito: boolean
+  /**
+   * cohorte_id of the cohorte (talleres_crecimiento_cohortes) that was
+   * created for this edicion. Per-row so each taller carries its own
+   * enrollment target (PR37 + PR38 fix). May be null for legacy rows
+   * created before PR37's backfill ran.
+   */
+  readonly cohorte_id: string | null
+  /**
+   * Modality of the abstract taller (talleres.modalidad_default).
+   * Surfaces as a label on the explorar card (PR38 — Issue #2).
+   */
+  readonly modalidad: 'periodo_general' | 'permanente_custom' | null
+  readonly descripcion: string | null
+  readonly fecha_apertura: string | null
+  readonly fecha_cierre: string | null
+}
+
+/**
+ * Loads talleres currently open for enrollment (`estado='abierto'`
+ * or `en_curso'`). Used by /talleres/explorar. Flags each taller with
+ * `ya_inscrito` when the participant already has an active inscription.
+ *
+ * PR38 — also surfaces:
+ *   - `cohorte_id` (joined from `talleres_crecimiento_cohortes`,
+ *     so the inscribirme action can target the right cohorte
+ *     without an extra round-trip on the page).
+ *   - `modalidad` and `descripcion` (from the parent `talleres`).
+ *   - `fecha_apertura` / `fecha_cierre` (from the linked
+ *     `taller_periodos_generales` row, if any).
+ *
+ * These joins are server-side; the participante surface stays
+ * summary-only (no motivos, no asistencia, no reportes).
+ *
+ * PR38 — joined-relationship fix. The previous nested-resource select
+ * tried to infer the FK direction from `talleres_crecimiento_cohortes`
+ * (which has a 1:N FK to `taller_ediciones`, not the other way around).
+ * PostgREST nested-resource is brittle when the relationship is 1:N
+ * (returns an array instead of an object) and when both FK directions
+ * exist between two tables. The fix splits the lookup into 4 explicit
+ * queries and joins in TS — no embedded join, no inferred FK.
+ */
+export async function loadParticipanteExplorar(
+  ctx: ParticipanteContext
+): Promise<readonly ParticipanteExplorarRow[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- server client
+  const client: any = ctx.supabase
+
+  // Query 1 — ediciones with their abstract taller (1:1 via taller_id).
+  // The `taller_id` column on `taller_es` is the explicit FK hint that
+  // disambiguates the embedded-resource join — without it, PostgREST
+  // can pick the wrong FK when both tables have multiple relationships.
+  const edicionesRes = await client
+    .from('taller_ediciones')
+    .select(
+      `id, nombre_snapshot, tipo, link_type, estado, taller_id,
+       taller:talleres!taller_id (slug, nombre, modalidad_default, descripcion)`,
+    )
+    .in('estado', ['abierto', 'en_curso'])
+    .order('created_at', { ascending: false })
+
+  if (edicionesRes.error) return []
+  const ediciones = (edicionesRes.data ?? []) as Array<{
+    id: string
+    nombre_snapshot: string
+    tipo: 'individual' | 'pareja'
+    link_type: 'matrimonio' | 'novios' | null
+    estado: 'borrador' | 'abierto' | 'en_curso' | 'cerrado' | 'cancelado'
+    taller_id: string
+    taller: {
+      slug: string
+      nombre: string
+      modalidad_default: 'periodo_general' | 'permanente_custom'
+      descripcion: string | null
+    } | null
+  }>
+
+  if (ediciones.length === 0) return []
+
+  // Queries 2-4 — batch fetches keyed by edicion id, fired in parallel
+  // because they don't depend on each other. We only fire them when
+  // there is at least one edicion to feed the .in() filter.
+  const edicionIds = ediciones.map((e) => e.id)
+  const [cohortesRes, periodosRes, inscripcionesRes] = await Promise.all([
+    client
+      .from('talleres_crecimiento_cohortes')
+      .select('id, taller_id')
+      .in('taller_id', edicionIds),
+    client
+      .from('taller_periodos_generales')
+      .select('taller_id, fecha_apertura_automatica, fecha_cierre_automatico')
+      .in('taller_id', edicionIds),
+    client
+      .from('taller_inscripciones')
+      .select('taller_id, estado')
+      .eq('persona_principal_id', ctx.personaId)
+      .in('estado', ['pendiente', 'aprobado']),
+  ])
+
+  // Build per-edicion lookup tables. Each edicion currently has at most
+  // one cohorte + one periodo in production (PR37 guarantee), but the
+  // schema is 1:N — pick the first row defensively in case of legacy
+  // data, and never let a missing batch fetch break the row.
+  const cohorteByEdicion = new Map<string, string>()
+  for (const row of ((cohortesRes.data ?? []) as Array<{
+    id: string
+    taller_id: string
+  }>)) {
+    if (!cohorteByEdicion.has(row.taller_id)) {
+      cohorteByEdicion.set(row.taller_id, row.id)
+    }
+  }
+
+  const periodoByEdicion = new Map<string, {
+    fecha_apertura_automatica: string | null
+    fecha_cierre_automatico: string | null
+  }>()
+  for (const row of ((periodosRes.data ?? []) as Array<{
+    taller_id: string
+    fecha_apertura_automatica: string | null
+    fecha_cierre_automatico: string | null
+  }>)) {
+    if (!periodoByEdicion.has(row.taller_id)) {
+      periodoByEdicion.set(row.taller_id, {
+        fecha_apertura_automatica: row.fecha_apertura_automatica,
+        fecha_cierre_automatico: row.fecha_cierre_automatico,
+      })
+    }
+  }
+
+  const inscritosIds = new Set<string>(
+    ((inscripcionesRes.data ?? []) as { taller_id: string }[]).map(
+      (row) => row.taller_id,
+    ),
+  )
+
+  return ediciones.map((row) => {
+    const periodo = periodoByEdicion.get(row.id)
+    return {
+      id: row.id,
+      nombre: row.taller?.nombre ?? row.nombre_snapshot,
+      slug: row.taller?.slug ?? '',
+      tipo: row.tipo,
+      link_type: row.link_type ?? null,
+      edicion: row.nombre_snapshot,
+      estado: row.estado,
+      ya_inscrito: inscritosIds.has(row.id),
+      cohorte_id: cohorteByEdicion.get(row.id) ?? null,
+      modalidad: row.taller?.modalidad_default ?? null,
+      descripcion: row.taller?.descripcion ?? null,
+      fecha_apertura: periodo?.fecha_apertura_automatica ?? null,
+      fecha_cierre: periodo?.fecha_cierre_automatico ?? null,
+    }
+  })
+}
+
+/**
+ * Loads a single certificado by id, scoped to the participant's own
+ * certificados only. Returns null if the certificado doesn't exist OR
+ * doesn't belong to the participant (deny-by-default).
+ */
+export async function loadParticipanteCertificado(
+  ctx: ParticipanteContext,
+  certificadoId: string
+): Promise<ParticipanteCertificado | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- server client
+  const client: any = ctx.supabase
+  // Filter on persona_id for deny-by-default — participants can only see
+  // their own certificados.
+  const { data, error } = await client
+    .from('taller_certificados')
+    .select(
+      'id, codigo_verificacion, taller_id, persona_id, nombre_taller_snapshot, fecha_completitud, revocado_at',
+    )
+    .eq('id', certificadoId)
+    .eq('persona_id', ctx.personaId)
+    .maybeSingle()
+  if (error || !data) return null
+  return {
+    id: data.id as string,
+    codigo_verificacion: data.codigo_verificacion as string,
+    taller_id: data.taller_id as string,
+    nombre_taller_snapshot: data.nombre_taller_snapshot as string,
+    fecha_completitud: data.fecha_completitud as string,
+    revocado_at: (data.revocado_at as string | null) ?? null,
+  }
+}
+
+/**
+ * Lists all certificados owned by the participant (non-revoked first).
+ */
+export async function loadParticipanteCertificados(
+  ctx: ParticipanteContext
+): Promise<readonly ParticipanteCertificado[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- server client
+  const client: any = ctx.supabase
+  const { data, error } = await client
+    .from('taller_certificados')
+    .select(
+      'id, codigo_verificacion, taller_id, nombre_taller_snapshot, fecha_completitud, revocado_at',
+    )
+    .eq('persona_id', ctx.personaId)
+    .order('created_at', { ascending: false })
+  if (error) return []
+  return (data ?? []).map((row: {
+    id: string
+    codigo_verificacion: string
+    taller_id: string
+    nombre_taller_snapshot: string
+    fecha_completitud: string
+    revocado_at: string | null
+  }) => ({
+    id: row.id,
+    codigo_verificacion: row.codigo_verificacion,
+    taller_id: row.taller_id,
+    nombre_taller_snapshot: row.nombre_taller_snapshot,
+    fecha_completitud: row.fecha_completitud,
+    revocado_at: row.revocado_at,
+  }))
+}
